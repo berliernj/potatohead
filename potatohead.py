@@ -1,10 +1,10 @@
 """
-Real-Time Face Feature Mapping with Proper Segmentation
+Real-Time Face Feature Mapping with Robust Segmentation (Stable Version)
 
-Upgrades in this version:
-- Extracts ONLY the eye and mouth shapes (no square patches)
-- Uses polygon masks based on facial landmarks
-- Blends features smoothly onto the model face
+Fixes included:
+- Prevents empty crop crashes
+- Handles fast movement / out-of-frame features
+- Safe masking + blending
 """
 
 import cv2
@@ -17,7 +17,7 @@ face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True)
 cap = cv2.VideoCapture(0)
 
 # -----------------------------
-# LANDMARK INDICES (FULL SHAPES)
+# LANDMARK INDICES
 # -----------------------------
 LEFT_EYE_IDX = [33, 160, 158, 133, 153, 144]
 RIGHT_EYE_IDX = [362, 385, 387, 263, 373, 380]
@@ -35,9 +35,10 @@ def get_point(landmark, w, h):
 
 def extract_feature(frame, landmarks, indices, w, h):
     """
-    Extract a feature using a polygon mask (eye or mouth).
-    Returns cropped image + mask.
+    Safe feature extraction using polygon mask.
+    Prevents crashes when feature goes out of frame.
     """
+
     pts = np.array([
         (int(landmarks[i].x * w), int(landmarks[i].y * h))
         for i in indices
@@ -47,16 +48,27 @@ def extract_feature(frame, landmarks, indices, w, h):
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillPoly(mask, [pts], 255)
 
-    # Extract region
     extracted = cv2.bitwise_and(frame, frame, mask=mask)
 
-    # Bounding box
     x, y, w_box, h_box = cv2.boundingRect(pts)
 
-    cropped = extracted[y:y+h_box, x:x+w_box]
-    cropped_mask = mask[y:y+h_box, x:x+w_box]
+    # Clamp to frame bounds
+    x = max(0, x)
+    y = max(0, y)
+    x2 = min(w, x + w_box)
+    y2 = min(h, y + h_box)
 
-    # Feather edges (important for smooth blending)
+    cropped = extracted[y:y2, x:x2]
+    cropped_mask = mask[y:y2, x:x2]
+
+    # 🛑 Prevent crashes (empty or tiny regions)
+    if cropped.size == 0 or cropped_mask.size == 0:
+        return None, None
+
+    if cropped.shape[0] < 5 or cropped.shape[1] < 5:
+        return None, None
+
+    # Smooth edges for better blending
     cropped_mask = cv2.GaussianBlur(cropped_mask, (15, 15), 0)
 
     return cropped, cropped_mask
@@ -64,13 +76,15 @@ def extract_feature(frame, landmarks, indices, w, h):
 
 def overlay_masked(dst, src, mask, center):
     """
-    Overlay using mask blending (smooth edges).
+    Blend feature onto model using mask.
     """
+
     h, w = src.shape[:2]
     x = int(center[0] - w // 2)
     y = int(center[1] - h // 2)
 
-    if y < 0 or x < 0 or y+h > dst.shape[0] or x+w > dst.shape[1]:
+    # Bounds check
+    if y < 0 or x < 0 or y + h > dst.shape[0] or x + w > dst.shape[1]:
         return
 
     roi = dst[y:y+h, x:x+w]
@@ -104,7 +118,6 @@ while True:
             nose = get_point(lm[NOSE], w, h)
             left_eye_center = get_point(lm[33], w, h)
             right_eye_center = get_point(lm[263], w, h)
-            mouth_center = get_point(lm[13], w, h)
 
             # -----------------------------
             # HEAD ROTATION
@@ -121,14 +134,14 @@ while True:
             cv2.ellipse(canvas, model_center, (120, 160), angle, 0, 360, (50, 50, 50), -1)
 
             # -----------------------------
-            # EXTRACT SEGMENTED FEATURES
+            # EXTRACT FEATURES (SAFE)
             # -----------------------------
             left_eye_img, left_eye_mask = extract_feature(frame, lm, LEFT_EYE_IDX, w, h)
             right_eye_img, right_eye_mask = extract_feature(frame, lm, RIGHT_EYE_IDX, w, h)
             mouth_img, mouth_mask = extract_feature(frame, lm, MOUTH_IDX, w, h)
 
             # -----------------------------
-            # MODEL FEATURE POSITIONS
+            # MODEL POSITIONS
             # -----------------------------
             model_left_eye = np.array([w * 0.4, h * 0.45])
             model_right_eye = np.array([w * 0.6, h * 0.45])
@@ -145,15 +158,15 @@ while True:
             model_mouth = transform_point(model_mouth)
 
             # -----------------------------
-            # OVERLAY WITH MASKS
+            # OVERLAY FEATURES (SAFE)
             # -----------------------------
-            if left_eye_img.size > 0:
+            if left_eye_img is not None:
                 overlay_masked(canvas, left_eye_img, left_eye_mask, model_left_eye)
 
-            if right_eye_img.size > 0:
+            if right_eye_img is not None:
                 overlay_masked(canvas, right_eye_img, right_eye_mask, model_right_eye)
 
-            if mouth_img.size > 0:
+            if mouth_img is not None:
                 overlay_masked(canvas, mouth_img, mouth_mask, model_mouth)
 
     cv2.imshow("Original", frame)

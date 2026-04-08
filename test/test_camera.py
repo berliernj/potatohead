@@ -1,5 +1,17 @@
 import cv2
 
+def list_available_cameras(max_devices=10):
+    available = []
+    for i in range(max_devices):
+        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)  # CAP_DSHOW often works better on Windows
+        if cap.isOpened():
+            available.append(i)
+            cap.release()
+    return available
+
+cameras = list_available_cameras()
+print("Available camera indexes:", cameras)
+
 # Try to open the default camera (device 0)
 cap = cv2.VideoCapture(0)
 

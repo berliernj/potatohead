@@ -1,0 +1,19 @@
+{
+  "name": "Project Potatohead",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance"
+      ]
+    }
+  },
+
+  "postCreateCommand": "pip install --upgrade pip",
+
+  "remoteUser": "vscode"
+}

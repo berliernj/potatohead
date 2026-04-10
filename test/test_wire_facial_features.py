@@ -53,13 +53,13 @@ with mp_face_mesh.FaceMesh(
                     connection_drawing_spec=eye_style
                 )
 
-                mp_drawing.draw_landmarks(
-                    image=frame,
-                    landmark_list=face_landmarks,
-                    connections=mp_face_mesh.FACEMESH_LEFT_EYEBROW,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=eye_style
-                )
+                # mp_drawing.draw_landmarks(
+                #     image=frame,
+                #     landmark_list=face_landmarks,
+                #     connections=mp_face_mesh.FACEMESH_LEFT_EYEBROW,
+                #     landmark_drawing_spec=None,
+                #     connection_drawing_spec=eye_style
+                # )
 
                 mp_drawing.draw_landmarks(
                     image=frame,
@@ -69,13 +69,13 @@ with mp_face_mesh.FaceMesh(
                     connection_drawing_spec=eye_style
                 )
 
-                mp_drawing.draw_landmarks(
-                    image=frame,
-                    landmark_list=face_landmarks,
-                    connections=mp_face_mesh.FACEMESH_RIGHT_EYEBROW,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=eye_style
-                )
+                # mp_drawing.draw_landmarks(
+                #     image=frame,
+                #     landmark_list=face_landmarks,
+                #     connections=mp_face_mesh.FACEMESH_RIGHT_EYEBROW,
+                #     landmark_drawing_spec=None,
+                #     connection_drawing_spec=eye_style
+                # )
 
         cv2.imshow("Face Mesh - Lips Fixed", frame)
 

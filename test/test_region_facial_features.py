@@ -4,7 +4,7 @@ import numpy as np
 
 mp_face_mesh = mp.solutions.face_mesh
 
-# Landmark groups (used to compute ellipses)
+# Landmark groups
 LEFT_EYE = [
     33, 7, 163, 144, 145, 153, 154, 155,
     133, 173, 157, 158, 159, 160, 161, 246
@@ -15,25 +15,39 @@ RIGHT_EYE = [
     263, 466, 388, 387, 386, 385, 384, 398
 ]
 
-LIPS = [
+MOUTH = [
     61, 146, 91, 181, 84, 17, 314, 405,
     321, 375, 291, 308, 78, 95, 88, 178,
     87, 14, 317, 402, 318, 324, 415
 ]
 
-NOSE = [1, 2, 98, 327, 168, 197, 195, 5, 4]
-
-def draw_ellipse(image, landmarks, indices, color, w, h):
+def get_points(landmarks, indices, w, h):
     pts = []
     for i in indices:
         lm = landmarks[i]
         pts.append((int(lm.x * w), int(lm.y * h)))
+    return np.array(pts)
 
-    pts = np.array(pts)
+def create_region_mask(frame_shape, points, padding=10):
+    mask = np.zeros(frame_shape[:2], dtype=np.uint8)
 
-    if len(pts) >= 5:  # required for ellipse fitting
-        ellipse = cv2.fitEllipse(pts)
-        cv2.ellipse(image, ellipse, color, 2)
+    # Get tight shape
+    hull = cv2.convexHull(points)
+
+    # Fill region
+    cv2.fillConvexPoly(mask, hull, 255)
+
+    # Expand region outward
+    if padding > 0:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (padding, padding))
+        mask = cv2.dilate(mask, kernel)
+
+    return mask
+
+def apply_overlay(frame, mask, color, alpha=0.3):
+    overlay = frame.copy()
+    overlay[mask == 255] = color
+    return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
 
 # Webcam
 cap = cv2.VideoCapture(0)
@@ -60,17 +74,22 @@ with mp_face_mesh.FaceMesh(
             for face_landmarks in results.multi_face_landmarks:
                 landmarks = face_landmarks.landmark
 
-                # 👁️ Eyes (full region feel)
-                draw_ellipse(frame, landmarks, LEFT_EYE, (255, 0, 0), w, h)
-                draw_ellipse(frame, landmarks, RIGHT_EYE, (0, 255, 0), w, h)
+                # 👁️ LEFT EYE
+                left_pts = get_points(landmarks, LEFT_EYE, w, h)
+                left_mask = create_region_mask(frame.shape, left_pts, padding=15)
+                frame = apply_overlay(frame, left_mask, (255, 0, 0))
 
-                # 👄 Lips
-                draw_ellipse(frame, landmarks, LIPS, (0, 0, 255), w, h)
+                # 👁️ RIGHT EYE
+                right_pts = get_points(landmarks, RIGHT_EYE, w, h)
+                right_mask = create_region_mask(frame.shape, right_pts, padding=15)
+                frame = apply_overlay(frame, right_mask, (0, 255, 0))
 
-                # 👃 Nose
-                draw_ellipse(frame, landmarks, NOSE, (0, 255, 255), w, h)
+                # 👄 MOUTH
+                mouth_pts = get_points(landmarks, MOUTH, w, h)
+                mouth_mask = create_region_mask(frame.shape, mouth_pts, padding=20)
+                frame = apply_overlay(frame, mouth_mask, (0, 0, 255))
 
-        cv2.imshow("Ellipse Face Regions", frame)
+        cv2.imshow("Eyes + Mouth Regions", frame)
 
         if cv2.waitKey(1) & 0xFF == 27:
             break

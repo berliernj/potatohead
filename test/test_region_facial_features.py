@@ -1,55 +1,140 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+from collections import deque
 
 mp_face_mesh = mp.solutions.face_mesh
 
-# Landmark groups
-LEFT_EYE = [
-    33, 7, 163, 144, 145, 153, 154, 155,
-    133, 173, 157, 158, 159, 160, 161, 246
-]
+# -----------------------------
+# LANDMARKS
+# -----------------------------
+UPPER_LIP = 13
+LOWER_LIP = 14
+MOUTH_LEFT = 61
+MOUTH_RIGHT = 291
 
-RIGHT_EYE = [
-    362, 382, 381, 380, 374, 373, 390, 249,
-    263, 466, 388, 387, 386, 385, 384, 398
-]
+LEFT_EYE_TOP = 159
+LEFT_EYE_BOTTOM = 145
+LEFT_EYE_LEFT = 33
+LEFT_EYE_RIGHT = 133
 
-MOUTH = [
-    61, 146, 91, 181, 84, 17, 314, 405,
-    321, 375, 291, 308, 78, 95, 88, 178,
-    87, 14, 317, 402, 318, 324, 415
-]
+RIGHT_EYE_TOP = 386
+RIGHT_EYE_BOTTOM = 374
+RIGHT_EYE_LEFT = 362
+RIGHT_EYE_RIGHT = 263
 
-def get_points(landmarks, indices, w, h):
-    pts = []
-    for i in indices:
-        lm = landmarks[i]
-        pts.append((int(lm.x * w), int(lm.y * h)))
-    return np.array(pts)
+# -----------------------------
+# SMOOTHING BUFFERS
+# -----------------------------
+def make_buffer():
+    return deque(maxlen=5)
 
-def create_region_mask(frame_shape, points, padding=10):
-    mask = np.zeros(frame_shape[:2], dtype=np.uint8)
+mouth_w = make_buffer()
+mouth_h = make_buffer()
+mouth_c = make_buffer()
 
-    # Get tight shape
-    hull = cv2.convexHull(points)
+leye_w = make_buffer()
+leye_h = make_buffer()
+leye_c = make_buffer()
 
-    # Fill region
-    cv2.fillConvexPoly(mask, hull, 255)
+reye_w = make_buffer()
+reye_h = make_buffer()
+reye_c = make_buffer()
 
-    # Expand region outward
-    if padding > 0:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (padding, padding))
-        mask = cv2.dilate(mask, kernel)
+# -----------------------------
+# HELPERS
+# -----------------------------
+def pt(lm, i, w, h):
+    return np.array([lm[i].x * w, lm[i].y * h])
 
-    return mask
+def dist(a, b):
+    return np.linalg.norm(a - b)
 
-def apply_overlay(frame, mask, color, alpha=0.3):
+def smooth(buf):
+    return np.mean(buf, axis=0)
+
+# -----------------------------
+# DRAW FUNCTIONS
+# -----------------------------
+def draw_region(frame, center, axis_x, axis_y, color, alpha=0.25):
     overlay = frame.copy()
-    overlay[mask == 255] = color
+
+    cv2.ellipse(
+        overlay,
+        tuple(center.astype(int)),
+        (int(axis_x), int(axis_y)),
+        0,
+        0,
+        360,
+        color,
+        -1
+    )
+
     return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
 
-# Webcam
+# -----------------------------
+# MOUTH
+# -----------------------------
+def update_mouth(frame, lm, w, h):
+    up = pt(lm, UPPER_LIP, w, h)
+    low = pt(lm, LOWER_LIP, w, h)
+    left = pt(lm, MOUTH_LEFT, w, h)
+    right = pt(lm, MOUTH_RIGHT, w, h)
+
+    center = (up + low + left + right) / 4
+    width = dist(left, right)
+    height = dist(up, low)
+
+    mouth_c.append(center)
+    mouth_w.append(width)
+    mouth_h.append(height)
+
+    c = smooth(mouth_c)
+    w_sm = smooth(mouth_w)
+    h_sm = smooth(mouth_h)
+
+    return draw_region(
+        frame,
+        c,
+        w_sm * 0.55,
+        max(18, h_sm * 3.2),
+        (0, 0, 255),
+        0.25
+    )
+
+# -----------------------------
+# EYES
+# -----------------------------
+def update_eye(frame, lm, top, bottom, left, right, w, h, buffers, color):
+    t = pt(lm, top, w, h)
+    b = pt(lm, bottom, w, h)
+    l = pt(lm, left, w, h)
+    r = pt(lm, right, w, h)
+
+    center = (t + b + l + r) / 4
+    width = dist(l, r)
+    height = dist(t, b)
+
+    buffers["c"].append(center)
+    buffers["w"].append(width)
+    buffers["h"].append(height)
+
+    c = smooth(buffers["c"])
+    w_sm = smooth(buffers["w"])
+    h_sm = smooth(buffers["h"])
+
+    return draw_region(
+        frame,
+        c,
+        w_sm * 0.6,
+        max(10, h_sm * 2.5),
+        color,
+        0.25
+    )
+
+# -----------------------------
+# MAIN
+# -----------------------------
 cap = cv2.VideoCapture(0)
 
 with mp_face_mesh.FaceMesh(
@@ -58,6 +143,9 @@ with mp_face_mesh.FaceMesh(
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 ) as face_mesh:
+
+    left_eye_buf = {"c": make_buffer(), "w": make_buffer(), "h": make_buffer()}
+    right_eye_buf = {"c": make_buffer(), "w": make_buffer(), "h": make_buffer()}
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -72,24 +160,32 @@ with mp_face_mesh.FaceMesh(
 
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
-                landmarks = face_landmarks.landmark
+                lm = face_landmarks.landmark
 
-                # 👁️ LEFT EYE
-                left_pts = get_points(landmarks, LEFT_EYE, w, h)
-                left_mask = create_region_mask(frame.shape, left_pts, padding=15)
-                frame = apply_overlay(frame, left_mask, (255, 0, 0))
+                # 👄 Mouth
+                frame = update_mouth(frame, lm, w, h)
 
-                # 👁️ RIGHT EYE
-                right_pts = get_points(landmarks, RIGHT_EYE, w, h)
-                right_mask = create_region_mask(frame.shape, right_pts, padding=15)
-                frame = apply_overlay(frame, right_mask, (0, 255, 0))
+                # 👁️ Left eye
+                frame = update_eye(
+                    frame, lm,
+                    LEFT_EYE_TOP, LEFT_EYE_BOTTOM,
+                    LEFT_EYE_LEFT, LEFT_EYE_RIGHT,
+                    w, h,
+                    left_eye_buf,
+                    (255, 0, 0)
+                )
 
-                # 👄 MOUTH
-                mouth_pts = get_points(landmarks, MOUTH, w, h)
-                mouth_mask = create_region_mask(frame.shape, mouth_pts, padding=20)
-                frame = apply_overlay(frame, mouth_mask, (0, 0, 255))
+                # 👁️ Right eye
+                frame = update_eye(
+                    frame, lm,
+                    RIGHT_EYE_TOP, RIGHT_EYE_BOTTOM,
+                    RIGHT_EYE_LEFT, RIGHT_EYE_RIGHT,
+                    w, h,
+                    right_eye_buf,
+                    (0, 255, 0)
+                )
 
-        cv2.imshow("Eyes + Mouth Regions", frame)
+        cv2.imshow("Smooth Eyes + Mouth AR Regions", frame)
 
         if cv2.waitKey(1) & 0xFF == 27:
             break
